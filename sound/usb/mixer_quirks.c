@@ -168,8 +168,7 @@ static int add_single_ctl_with_resume(struct usb_mixer_interface *mixer,
 		return -ENOMEM;
 	}
 	kctl->private_free = snd_usb_mixer_elem_free;
-	/* don't use snd_usb_mixer_add_control() here, this is a special list element */
-	return snd_usb_mixer_add_list(list, kctl, false);
+	return snd_usb_mixer_add_control(list, kctl);
 }
 
 /*
@@ -1168,17 +1167,17 @@ void snd_emuusb_set_samplerate(struct snd_usb_audio *chip,
 {
 	struct usb_mixer_interface *mixer;
 	struct usb_mixer_elem_info *cval;
-	int unitid = 12; /* SampleRate ExtensionUnit ID */
+	int unitid = 12; /* SamleRate ExtensionUnit ID */
 
 	list_for_each_entry(mixer, &chip->mixer_list, list) {
-		if (mixer->id_elems[unitid]) {
-			cval = mixer_elem_list_to_info(mixer->id_elems[unitid]);
+		cval = (struct usb_mixer_elem_info *)mixer->id_elems[unitid];
+		if (cval) {
 			snd_usb_mixer_set_ctl_value(cval, UAC_SET_CUR,
 						    cval->control << 8,
 						    samplerate_id);
 			snd_usb_mixer_notify_id(mixer, unitid);
-			break;
 		}
+		break;
 	}
 }
 

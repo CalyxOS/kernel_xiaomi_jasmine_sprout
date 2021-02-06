@@ -82,7 +82,6 @@
 #include <linux/slab.h>
 #include <linux/sched.h>
 #include <linux/mutex.h>
-#include <linux/rwsem.h>
 #include <linux/string.h>
 #include <linux/mm.h>
 #include <linux/socket.h>
@@ -188,7 +187,7 @@ static DEFINE_SPINLOCK(napi_hash_lock);
 static unsigned int napi_gen_id = NR_CPUS;
 static DEFINE_READ_MOSTLY_HASHTABLE(napi_hash, 8);
 
-static DECLARE_RWSEM(devnet_rename_sem);
+static seqcount_t devnet_rename_seq;
 
 static inline void dev_base_seq_inc(struct net *net)
 {
@@ -865,28 +864,33 @@ EXPORT_SYMBOL(dev_get_by_index);
  *	@net: network namespace
  *	@name: a pointer to the buffer where the name will be stored.
  *	@ifindex: the ifindex of the interface to get the name from.
+ *
+ *	The use of raw_seqcount_begin() and cond_resched() before
+ *	retrying is required as we want to give the writers a chance
+ *	to complete when CONFIG_PREEMPT is not set.
  */
 int netdev_get_name(struct net *net, char *name, int ifindex)
 {
 	struct net_device *dev;
-	int ret;
+	unsigned int seq;
 
-	down_read(&devnet_rename_sem);
+retry:
+	seq = raw_seqcount_begin(&devnet_rename_seq);
 	rcu_read_lock();
-
 	dev = dev_get_by_index_rcu(net, ifindex);
 	if (!dev) {
-		ret = -ENODEV;
-		goto out;
+		rcu_read_unlock();
+		return -ENODEV;
 	}
 
 	strcpy(name, dev->name);
-
-	ret = 0;
-out:
 	rcu_read_unlock();
-	up_read(&devnet_rename_sem);
-	return ret;
+	if (read_seqcount_retry(&devnet_rename_seq, seq)) {
+		cond_resched();
+		goto retry;
+	}
+
+	return 0;
 }
 
 /**
@@ -1151,10 +1155,10 @@ int dev_change_name(struct net_device *dev, const char *newname)
 	if (dev->flags & IFF_UP)
 		return -EBUSY;
 
-	down_write(&devnet_rename_sem);
+	write_seqcount_begin(&devnet_rename_seq);
 
 	if (strncmp(newname, dev->name, IFNAMSIZ) == 0) {
-		up_write(&devnet_rename_sem);
+		write_seqcount_end(&devnet_rename_seq);
 		return 0;
 	}
 
@@ -1162,7 +1166,7 @@ int dev_change_name(struct net_device *dev, const char *newname)
 
 	err = dev_get_valid_name(net, dev, newname);
 	if (err < 0) {
-		up_write(&devnet_rename_sem);
+		write_seqcount_end(&devnet_rename_seq);
 		return err;
 	}
 
@@ -1177,11 +1181,11 @@ rollback:
 	if (ret) {
 		memcpy(dev->name, oldname, IFNAMSIZ);
 		dev->name_assign_type = old_assign_type;
-		up_write(&devnet_rename_sem);
+		write_seqcount_end(&devnet_rename_seq);
 		return ret;
 	}
 
-	up_write(&devnet_rename_sem);
+	write_seqcount_end(&devnet_rename_seq);
 
 	netdev_adjacent_rename_links(dev, oldname);
 
@@ -1202,7 +1206,7 @@ rollback:
 		/* err >= 0 after dev_alloc_name() or stores the first errno */
 		if (err >= 0) {
 			err = ret;
-			down_write(&devnet_rename_sem);
+			write_seqcount_begin(&devnet_rename_seq);
 			memcpy(dev->name, oldname, IFNAMSIZ);
 			memcpy(oldname, newname, IFNAMSIZ);
 			dev->name_assign_type = old_assign_type;
@@ -3023,7 +3027,7 @@ static void skb_update_prio(struct sk_buff *skb)
 DEFINE_PER_CPU(int, xmit_recursion);
 EXPORT_SYMBOL(xmit_recursion);
 
-#define RECURSION_LIMIT 8
+#define RECURSION_LIMIT 10
 
 /**
  *	dev_loopback_xmit - loop back @skb
@@ -6876,13 +6880,6 @@ int register_netdevice(struct net_device *dev)
 		rcu_barrier();
 
 		dev->reg_state = NETREG_UNREGISTERED;
-		/* We should put the kobject that hold in
-		 * netdev_unregister_kobject(), otherwise
-		 * the net device cannot be freed when
-		 * driver calls free_netdev(), because the
-		 * kobject is being hold.
-		 */
-		kobject_put(&dev->dev.kobj);
 	}
 	/*
 	 *	Prevent userspace races by waiting until the network
