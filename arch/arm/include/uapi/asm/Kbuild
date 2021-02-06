@@ -18,6 +18,3 @@ header-y += stat.h
 header-y += statfs.h
 header-y += swab.h
 header-y += unistd.h
-genhdr-y += unistd-common.h
-genhdr-y += unistd-oabi.h
-genhdr-y += unistd-eabi.h

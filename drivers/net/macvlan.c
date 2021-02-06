@@ -305,8 +305,6 @@ static void macvlan_process_broadcast(struct work_struct *w)
 
 		rcu_read_unlock();
 
-		if (src)
-			dev_put(src->dev);
 		kfree_skb(skb);
 
 		cond_resched();
@@ -314,7 +312,6 @@ static void macvlan_process_broadcast(struct work_struct *w)
 }
 
 static void macvlan_broadcast_enqueue(struct macvlan_port *port,
-				      const struct macvlan_dev *src,
 				      struct sk_buff *skb)
 {
 	struct sk_buff *nskb;
@@ -324,12 +321,8 @@ static void macvlan_broadcast_enqueue(struct macvlan_port *port,
 	if (!nskb)
 		goto err;
 
-	MACVLAN_SKB_CB(nskb)->src = src;
-
 	spin_lock(&port->bc_queue.lock);
 	if (skb_queue_len(&port->bc_queue) < MACVLAN_BC_QUEUE_LEN) {
-		if (src)
-			dev_hold(src->dev);
 		__skb_queue_tail(&port->bc_queue, nskb);
 		err = 0;
 	}
@@ -439,7 +432,8 @@ static rx_handler_result_t macvlan_handle_frame(struct sk_buff **pskb)
 			goto out;
 		}
 
-		macvlan_broadcast_enqueue(port, src, skb);
+		MACVLAN_SKB_CB(skb)->src = src;
+		macvlan_broadcast_enqueue(port, skb);
 
 		return RX_HANDLER_PASS;
 	}

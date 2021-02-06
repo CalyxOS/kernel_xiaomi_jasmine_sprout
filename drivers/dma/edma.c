@@ -2439,13 +2439,7 @@ static struct platform_driver edma_driver = {
 	},
 };
 
-static int edma_tptc_probe(struct platform_device *pdev)
-{
-	return 0;
-}
-
 static struct platform_driver edma_tptc_driver = {
-	.probe		= edma_tptc_probe,
 	.driver = {
 		.name	= "edma3-tptc",
 		.of_match_table = edma_tptc_of_ids,

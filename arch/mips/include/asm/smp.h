@@ -63,8 +63,6 @@ extern cpumask_t cpu_coherent_mask;
 
 extern void asmlinkage smp_bootstrap(void);
 
-extern void calculate_cpu_foreign_map(void);
-
 /*
  * this function sends a 'reschedule' IPI to another CPU.
  * it goes straight through and wastes no time serializing

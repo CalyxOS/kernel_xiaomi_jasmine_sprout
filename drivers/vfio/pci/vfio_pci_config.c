@@ -698,8 +698,7 @@ static int vfio_vpd_config_write(struct vfio_pci_device *vdev, int pos,
 		if (pci_write_vpd(pdev, addr & ~PCI_VPD_ADDR_F, 4, &data) != 4)
 			return count;
 	} else {
-		data = 0;
-		if (pci_read_vpd(pdev, addr, 4, &data) < 0)
+		if (pci_read_vpd(pdev, addr, 4, &data) != 4)
 			return count;
 		*pdata = cpu_to_le32(data);
 	}

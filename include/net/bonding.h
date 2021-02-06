@@ -34,9 +34,6 @@
 
 #define BOND_DEFAULT_MIIMON	100
 
-#ifndef __long_aligned
-#define __long_aligned __attribute__((aligned((sizeof(long)))))
-#endif
 /*
  * Less bad way to call ioctl from within the kernel; this needs to be
  * done some other way to get the call out of interrupt context.
@@ -141,9 +138,7 @@ struct bond_params {
 	struct reciprocal_value reciprocal_packets_per_slave;
 	u16 ad_actor_sys_prio;
 	u16 ad_user_port_key;
-
-	/* 2 bytes of padding : see ether_addr_equal_64bits() */
-	u8 ad_actor_system[ETH_ALEN + 2];
+	u8 ad_actor_system[ETH_ALEN];
 };
 
 struct bond_parm_tbl {

@@ -98,7 +98,7 @@ struct nf_conn {
 	possible_net_t ct_net;
 
 	/* all members below initialized via memset */
-	struct { } __nfct_init_offset;
+	u8 __nfct_init_offset[0];
 
 	/* If we were expected by an expectation, this will be it */
 	struct nf_conn *master;
