@@ -1226,18 +1226,19 @@ static void dx_insert_block(struct dx_frame *frame, u32 hash, ext4_lblk_t block)
 }
 
 /*
- * Test whether a directory entry matches the filename being searched for.
+ * NOTE! unlike strncmp, ext4_match returns 1 for success, 0 for failure.
  *
- * Return: %true if the directory entry matches, otherwise %false.
+ * `len <= EXT4_NAME_LEN' is guaranteed by caller.
+ * `de != NULL' is guaranteed by caller.
  */
-static inline bool ext4_match(const struct ext4_filename *fname,
-			      const struct ext4_dir_entry_2 *de)
+static inline int ext4_match(struct ext4_filename *fname,
+			     struct ext4_dir_entry_2 *de)
 {
 	const void *name = fname_name(fname);
 	u32 len = fname_len(fname);
 
 	if (!de->inode)
-		return false;
+		return 0;
 
 #ifdef CONFIG_EXT4_FS_ENCRYPTION
 	if (unlikely(!name)) {
@@ -1269,31 +1270,48 @@ int ext4_search_dir(struct buffer_head *bh, char *search_buf, int buf_size,
 	struct ext4_dir_entry_2 * de;
 	char * dlimit;
 	int de_len;
+	int res;
 
 	de = (struct ext4_dir_entry_2 *)search_buf;
 	dlimit = search_buf + buf_size;
 	while ((char *) de < dlimit) {
 		/* this code is executed quadratically often */
 		/* do minimal checking `by hand' */
-		if ((char *) de + de->name_len <= dlimit &&
-		    ext4_match(fname, de)) {
-			/* found a match - just to be sure, do
-			 * a full check */
-			if (ext4_check_dir_entry(dir, NULL, de, bh, search_buf,
-						 buf_size, offset))
-				return -1;
-			*res_dir = de;
-			return 1;
+		if ((char *) de + de->name_len <= dlimit) {
+			res = ext4_match(fname, de);
+			if (res < 0) {
+				res = -1;
+				goto return_result;
+			}
+			if (res > 0) {
+				/* found a match - just to be sure, do
+				 * a full check */
+				if (ext4_check_dir_entry(dir, NULL, de, bh,
+						bh->b_data,
+						 bh->b_size, offset)) {
+					res = -1;
+					goto return_result;
+				}
+				*res_dir = de;
+				res = 1;
+				goto return_result;
+			}
+
 		}
 		/* prevent looping on a bad block */
 		de_len = ext4_rec_len_from_disk(de->rec_len,
 						dir->i_sb->s_blocksize);
-		if (de_len <= 0)
-			return -1;
+		if (de_len <= 0) {
+			res = -1;
+			goto return_result;
+		}
 		offset += de_len;
 		de = (struct ext4_dir_entry_2 *) ((char *) de + de_len);
 	}
-	return 0;
+
+	res = 0;
+return_result:
+	return res;
 }
 
 static int is_dx_internal_node(struct inode *dir, ext4_lblk_t block,
@@ -1730,7 +1748,7 @@ static struct ext4_dir_entry_2 *do_split(handle_t *handle, struct inode *dir,
 			     blocksize, hinfo, map);
 	map -= count;
 	dx_sort_map(map, count);
-	/* Ensure that neither split block is over half full */
+	/* Split the existing block in the middle, size-wise */
 	size = 0;
 	move = 0;
 	for (i = count-1; i >= 0; i--) {
@@ -1740,18 +1758,8 @@ static struct ext4_dir_entry_2 *do_split(handle_t *handle, struct inode *dir,
 		size += map[i].size;
 		move++;
 	}
-	/*
-	 * map index at which we will split
-	 *
-	 * If the sum of active entries didn't exceed half the block size, just
-	 * split it in half by count; each resulting block will have at least
-	 * half the space free.
-	 */
-	if (i > 0)
-		split = count - move;
-	else
-		split = count/2;
-
+	/* map index at which we will split */
+	split = count - move;
 	hash2 = map[split].hash;
 	continued = hash2 == map[split - 1].hash;
 	dxtrace(printk(KERN_INFO "Split block %lu at %x, %i/%i\n",
@@ -1816,15 +1824,24 @@ int ext4_find_dest_de(struct inode *dir, struct inode *inode,
 	int nlen, rlen;
 	unsigned int offset = 0;
 	char *top;
+	int res;
 
 	de = (struct ext4_dir_entry_2 *)buf;
 	top = buf + buf_size - reclen;
 	while ((char *) de <= top) {
 		if (ext4_check_dir_entry(dir, NULL, de, bh,
-					 buf, buf_size, offset))
-			return -EFSCORRUPTED;
-		if (ext4_match(fname, de))
-			return -EEXIST;
+					 buf, buf_size, offset)) {
+			res = -EFSCORRUPTED;
+			goto return_result;
+		}
+		/* Provide crypto context and crypto buffer to ext4 match */
+		res = ext4_match(fname, de);
+		if (res < 0)
+			goto return_result;
+		if (res > 0) {
+			res = -EEXIST;
+			goto return_result;
+		}
 		nlen = EXT4_DIR_REC_LEN(de->name_len);
 		rlen = ext4_rec_len_from_disk(de->rec_len, buf_size);
 		if ((de->inode ? rlen - nlen : rlen) >= reclen)
@@ -1832,11 +1849,15 @@ int ext4_find_dest_de(struct inode *dir, struct inode *inode,
 		de = (struct ext4_dir_entry_2 *)((char *)de + rlen);
 		offset += rlen;
 	}
-	if ((char *) de > top)
-		return -ENOSPC;
 
-	*dest_de = de;
-	return 0;
+	if ((char *) de > top)
+		res = -ENOSPC;
+	else {
+		*dest_de = de;
+		res = 0;
+	}
+return_result:
+	return res;
 }
 
 int ext4_insert_dentry(struct inode *dir,
@@ -2319,7 +2340,7 @@ int ext4_generic_delete_entry(handle_t *handle,
 	de = (struct ext4_dir_entry_2 *)entry_buf;
 	while (i < buf_size - csum_size) {
 		if (ext4_check_dir_entry(dir, NULL, de, bh,
-					 entry_buf, buf_size, i))
+					 bh->b_data, bh->b_size, i))
 			return -EFSCORRUPTED;
 		if (de == de_del)  {
 			if (pde)
