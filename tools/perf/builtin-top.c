@@ -626,9 +626,7 @@ repeat:
 	delay_msecs = top->delay_secs * 1000;
 	set_term_quiet_input(&save);
 	/* trash return*/
-	clearerr(stdin);
-	if (poll(&stdin_poll, 1, 0) > 0)
-		getc(stdin);
+	getc(stdin);
 
 	while (!done) {
 		perf_top__print_sym_table(top);

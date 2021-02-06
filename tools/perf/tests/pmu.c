@@ -169,7 +169,6 @@ int test__pmu(void)
 		ret = 0;
 	} while (0);
 
-	perf_pmu__del_formats(&formats);
 	test_format_dir_put(format);
 	return ret;
 }
